@@ -128,5 +128,6 @@ GLvoid keyboard(int key, int x, int y)
         break;
     }
 
+    std::cout << "Your Position is: (" << playerX << ", " << playerY << ")\n";
     glutPostRedisplay();
 }
