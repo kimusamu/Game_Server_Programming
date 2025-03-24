@@ -9,8 +9,10 @@
 #include <cstdio>
 #include <locale>
 
-#include <GL/glew.h>
-#include <GL/freeglut.h>
+#include <gl/glew.h>
+#include <gl/freeglut.h>
+#include <gl/freeglut_ext.h>
+
 #include <WS2tcpip.h>
 
 #pragma comment (lib, "WS2_32.lib")
