@@ -4,12 +4,12 @@ CPU
 Memory
 32GB
 
-성능 비교 표
-overlapped server 	: 339
-single iocp server 	: 360
-multi iocp server 		: 659
-non blocking server 	: 313
-multi thread server 	: 579
+성능 비교 표(Release 기준)
+overlapped server 	: 382 clients
+single iocp server 	: 447 clients
+multi iocp server 		: 980 clients
+non blocking server 	: 401 clients
+multi thread server 	: 781 clients
 ///////////////////////////////////////////////////////////////////
 
 최적화 기법
