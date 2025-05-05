@@ -1,0 +1,53 @@
+성능표
+CPU
+12th Gen Inter(R) Core(TM) i5-12500H
+Memory
+32GB
+
+성능 비교 표
+overlapped server 	: 339
+single iocp server 	: 360
+multi iocp server 		: 659
+non blocking server 	: 313
+multi thread server 	: 579
+///////////////////////////////////////////////////////////////////
+
+최적화 기법
+
+overlapped server
+1. overlapped I/O + Callback 기반 비동기 처리
+2. 단일 Buffer 활용 + 잔여 데이터 관리
+3. hEvent에 Client ID 저장
+4. unordered_map을 이용한 클라이언트 관리
+5. 최소한의 동적 할당
+6. 패킷 처리 루프의 일괄 처리
+
+single iocp server
+1. IOCP 기반 + AcceptEx
+2. GetQueuedCompletionStatus를 통한 단일 이벤트 루프
+3. SESSION::_prev_remain와 OVER_EXP::_send_buf 재활용을 통한 불필요한 버퍼 할당 / 해제 최소화
+4. hEvent = reinterpret_cast<HANDLE>(client_id)를 통한 식별자 전달
+5. OVER_EXP에서만 new / delete 하여 memory overhead 절감
+6. unordered_map을 이용한 클라이언트 관리
+
+multi iocp server
+1. Thread Pool + IOCP 사용
+2. unordered_map을 통한 클라이언트 관리 + 접근 시 최소한의 범위에서 lock
+3. hash map rehash 방지
+4. OVER_EXP._send_buff를 통한 자원 재활용
+5. OVER_EXP에서만 new / delete 하여 memory overhead 절감
+
+non blocking server
+1. Overlapped I/O + Callback
+2. shared_mutex + atomic
+3. 읽기 시 shared_lock을 통한 다중 스레드 동시처리, 쓰기 시 unique_lock을 통한 최소한의 잠금 범위
+4. 버퍼 잔여 데이터 관리
+5. hEvent에 세션 ID 심기
+6. 단순한 연결 흐름
+
+multi thread server
+1. Overlapped I/O + Callback
+2. Worker Thread Pool
+3. shared_mutex + atomic:
+4. OVER_EXP._buf 재활용
+5. hEvent에 Session ID 삽입
