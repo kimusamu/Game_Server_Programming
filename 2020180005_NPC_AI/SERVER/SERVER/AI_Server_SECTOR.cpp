@@ -1,3 +1,5 @@
+#define NOMINMAX
+
 #include <iostream>
 #include <array>
 #include <WS2tcpip.h>
@@ -10,7 +12,7 @@
 #include <memory>
 #include <chrono>
 #include <queue>
-#include <algorithm>
+#include <algorithm> 
 #include "protocol.h"
 
 #pragma comment(lib, "WS2_32.lib")
@@ -23,15 +25,30 @@ constexpr int SECTOR_SIZE = 16;
 constexpr int SECTOR_X = (W_WIDTH + SECTOR_SIZE - 1) / SECTOR_SIZE;
 constexpr int SECTOR_Y = (W_HEIGHT + SECTOR_SIZE - 1) / SECTOR_SIZE;
 
-std::vector<std::unordered_set<int>> sectors(SECTOR_X* SECTOR_Y);
-std::vector<std::mutex> sector_mutexes(SECTOR_X* SECTOR_Y);
+static vector<unordered_set<int>> sectors(SECTOR_X* SECTOR_Y);
+static vector<mutex> sector_mutexes(SECTOR_X* SECTOR_Y);
 
-inline int get_sector_index(int x, int y)
+inline int get_sector_index(int x, int y) 
 {
-	int sx = std::clamp(x / SECTOR_SIZE, 0, SECTOR_X - 1);
-	int sy = std::clamp(y / SECTOR_SIZE, 0, SECTOR_Y - 1);
-
+	int sx = clamp(x / SECTOR_SIZE, 0, SECTOR_X - 1);
+	int sy = clamp(y / SECTOR_SIZE, 0, SECTOR_Y - 1);
 	return sy * SECTOR_X + sx;
+}
+
+void update_sector(int id, int old_x, int old_y, int new_x, int new_y) 
+{
+	int old_idx = get_sector_index(old_x, old_y);
+	int new_idx = get_sector_index(new_x, new_y);
+	if (old_idx == new_idx) return;
+	{
+		lock_guard<mutex> lk(sector_mutexes[old_idx]);
+		sectors[old_idx].erase(id);
+	}
+
+	{
+		lock_guard<mutex> lk(sector_mutexes[new_idx]);
+		sectors[new_idx].insert(id);
+	}
 }
 
 enum COMP_TYPE { OP_ACCEPT, OP_RECV, OP_SEND, OP_NPC_MOVE };
@@ -265,6 +282,8 @@ void process_packet(int c_id, char* packet)
 			clients[c_id]->_state = ST_INGAME;
 		}
 
+		update_sector(c_id, 0, 0, clients[c_id]->x, clients[c_id]->y);
+
 		clients[c_id]->send_login_info_packet();
 
 		for (auto& pl : clients)
@@ -309,8 +328,10 @@ void process_packet(int c_id, char* packet)
 		CS_MOVE_PACKET* p = reinterpret_cast<CS_MOVE_PACKET*>(packet);
 		clients[c_id]->last_move_time = p->move_time;
 
-		short x = clients[c_id]->x;
-		short y = clients[c_id]->y;
+		short old_x = clients[c_id]->x;
+		short old_y = clients[c_id]->y;
+		short x = old_x;
+		short y = old_y;
 
 		switch (p->direction)
 		{
@@ -349,6 +370,8 @@ void process_packet(int c_id, char* packet)
 
 		clients[c_id]->x = x;
 		clients[c_id]->y = y;
+
+		update_sector(c_id, old_x, old_y, x, y);
 
 		unordered_set<int> near_list;
 		clients[c_id]->_vl.lock();
@@ -421,6 +444,8 @@ void process_packet(int c_id, char* packet)
 
 		break;
 	}
+	default:
+		break;
 	}
 }
 
@@ -464,66 +489,50 @@ void disconnect(int c_id)
 void do_npc_random_move(int npc_id)
 {
 	SESSION& npc = *clients[npc_id];
-	unordered_set<int> old_vl;
+	int sec_idx = get_sector_index(npc.x, npc.y);
+	int sx = (sec_idx % SECTOR_X) * SECTOR_SIZE;
+	int sy = (sec_idx / SECTOR_X) * SECTOR_SIZE;
+	int ex = min(sx + SECTOR_SIZE - 1, W_WIDTH - 1);
+	int ey = min(sy + SECTOR_SIZE - 1, W_HEIGHT - 1);
+	int old_x = npc.x, old_y = npc.y;
+	int x = old_x, y = old_y;
 
-	for (auto& obj : clients)
+	switch (rand() % 4) {
+	case 0: 
 	{
-		if (ST_INGAME != obj.second->_state)
+		if (x < ex)
 		{
-			continue;
-		}
-
-		if (true == is_npc(obj.second->_id))
-		{
-			continue;
-		}
-
-		if (true == can_see(npc._id, obj.second->_id))
-		{
-			old_vl.insert(obj.second->_id);
-		}
-	}
-
-	int x = npc.x;
-	int y = npc.y;
-
-	switch (rand() % 4)
-	{
-	case 0:
-	{
-		if (x < (W_WIDTH - 1))
-		{
-			x++;
+			++x; 
 		}
 
 		break;
 	}
 
-	case 1:
+	case 1: 
 	{
-		if (x > 0)
+		if (x > sx)
 		{
-			x--;
+			--x; 
 		}
 
 		break;
 	}
 
-	case 2:
+	case 2: 
 	{
-		if (y < (W_HEIGHT - 1))
+		if (y < ey)
 		{
-			y++;
+			++y;
 		}
 
 		break;
 	}
 
-	case 3:
+	case 3: 
 	{
-		if (y > 0)
+		if (y > sy)
 		{
-			y--;
+			--y; 
 		}
 
 		break;
@@ -533,54 +542,92 @@ void do_npc_random_move(int npc_id)
 	npc.x = x;
 	npc.y = y;
 
+	update_sector(npc_id, old_x, old_y, x, y);
+
+	unordered_set<int> old_vl;
 	unordered_set<int> new_vl;
 
-	for (auto& obj : clients)
-	{
-		if (ST_INGAME != obj.second->_state)
+	for (auto& obj : clients) {
+		if (obj.second->_state != ST_INGAME)
 		{
 			continue;
 		}
 
-		if (true == is_npc(obj.second->_id))
+		if (is_npc(obj.second->_id))
 		{
 			continue;
 		}
 
-		if (true == can_see(npc._id, obj.second->_id))
+		if (can_see(npc._id, obj.second->_id))
 		{
-			new_vl.insert(obj.second->_id);
+			old_vl.insert(obj.second->_id);
 		}
 	}
 
-	for (auto pl : new_vl)
+	int sx_i = sec_idx % SECTOR_X;
+	int sy_i = sec_idx / SECTOR_X;
+
+	for (int dy = -1; dy <= 1; ++dy) 
 	{
-		if (0 == old_vl.count(pl))
+		for (int dx = -1; dx <= 1; ++dx) 
 		{
-			// 플레이어의 시야에 등장
-			clients[pl]->send_add_player_packet(npc._id);
+			int nx = sx_i + dx, ny = sy_i + dy;
+
+			if (nx < 0 || nx >= SECTOR_X || ny < 0 || ny >= SECTOR_Y)
+			{
+				continue;
+			}
+
+			int neigh_idx = ny * SECTOR_X + nx;
+
+			lock_guard<mutex> lk(sector_mutexes[neigh_idx]);
+
+			for (int pid : sectors[neigh_idx]) 
+			{
+				if (pid == npc_id)
+				{
+					continue;
+				}
+
+				if (clients[pid]->_state != ST_INGAME || is_npc(pid))
+				{
+					continue;
+				}
+
+				if (can_see(npc_id, pid))
+				{
+					new_vl.insert(pid);
+				}
+			}
+		}
+	}
+
+	for (int pl : new_vl) 
+	{
+		if (!old_vl.count(pl))
+		{
+			clients[pl]->send_add_player_packet(npc_id);
 		}
 
 		else
 		{
-			// 플레이어가 계속 보고 있음.
-			clients[pl]->send_move_packet(npc._id);
+			clients[pl]->send_move_packet(npc_id);
 		}
 	}
 
-	for (auto pl : old_vl)
+	for (int pl : old_vl) 
 	{
-		if (0 == new_vl.count(pl))
+		if (!new_vl.count(pl))
 		{
 			clients[pl]->_vl.lock();
 
-			if (0 != clients[pl]->_view_list.count(npc._id))
+			if (clients[pl]->_view_list.count(npc_id)) 
 			{
 				clients[pl]->_vl.unlock();
-				clients[pl]->send_remove_player_packet(npc._id);
+				clients[pl]->send_remove_player_packet(npc_id);
 			}
 
-			else
+			else 
 			{
 				clients[pl]->_vl.unlock();
 			}
@@ -589,9 +636,9 @@ void do_npc_random_move(int npc_id)
 
 	using namespace chrono;
 
-	long long current_time = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
+	long long current_time = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 
-	if (MAX_USER == npc_id)
+	if (npc_id == MAX_USER) 
 	{
 		std::cout << "MOVE : " << current_time - clients[npc_id]->last_move_time << "ms.\n";
 	}
@@ -749,6 +796,10 @@ void InitializeNPC()
 		sprintf_s(clients[i]->_name, "NPC%d", i);
 		clients[i]->_state = ST_INGAME;
 		clients[i]->_is_active = false;
+
+		int idx = get_sector_index(clients[i]->x, clients[i]->y);
+		lock_guard<mutex> lk(sector_mutexes[idx]);
+		sectors[idx].insert(i);
 	}
 
 	cout << "NPC initialize end.\n";
