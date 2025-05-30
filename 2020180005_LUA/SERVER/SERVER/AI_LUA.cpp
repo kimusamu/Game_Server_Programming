@@ -7,21 +7,24 @@
 #include <thread>
 #include <vector>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_set>
 #include <concurrent_unordered_map.h>
 #include <concurrent_priority_queue.h>
+#include <atomic>
 #include <memory>
 #include <chrono>
 #include <queue>
-#include <algorithm> 
-#include "protocol.h"
+#include <algorithm>
 
+#include "protocol.h"
 #include "include/lua.hpp"
 
 #pragma comment(lib, "WS2_32.lib")
 #pragma comment(lib, "MSWSock.lib")
 
 using namespace std;
+using namespace chrono;
 
 constexpr int VIEW_RANGE = 5;
 constexpr int SECTOR_SIZE = 16;
@@ -35,6 +38,7 @@ inline int get_sector_index(int x, int y)
 {
 	int sx = clamp(x / SECTOR_SIZE, 0, SECTOR_X - 1);
 	int sy = clamp(y / SECTOR_SIZE, 0, SECTOR_Y - 1);
+
 	return sy * SECTOR_X + sx;
 }
 
@@ -133,7 +137,6 @@ public:
 	int  _greet_moves_left = 0;
 	int  _greet_target = -1;
 
-
 public:
 	SESSION()
 	{
@@ -230,6 +233,63 @@ bool can_see(int from, int to)
 	return abs(clients[from]->y - clients[to]->y) <= VIEW_RANGE;
 }
 
+static vector<int> get_neighbor_sectors(int sec_idx)
+{
+	int sx = sec_idx % SECTOR_X;
+	int sy = sec_idx / SECTOR_X;
+
+	vector<int> neigh;
+	neigh.reserve(9);
+
+	for (int dy = -1; dy <= 1; ++dy)
+	{
+		for (int dx = -1; dx <= 1; ++dx)
+		{
+			int nx = sx + dx;
+			int ny = sy + dy;
+
+			if (nx < 0 || nx >= SECTOR_X || ny < 0 || ny >= SECTOR_Y)
+			{
+				continue;
+			}
+
+			neigh.push_back(ny * SECTOR_X + nx);
+		}
+	}
+
+	return neigh;
+}
+
+unordered_set<int> gather_visible(int viewer_id)
+{
+	int sec = get_sector_index(clients[viewer_id]->x, clients[viewer_id]->y);
+	auto neigh = get_neighbor_sectors(sec);
+	unordered_set<int> vis;
+
+	for (int s : neigh)
+	{
+		lock_guard<mutex> lk(sector_mutexes[s]);
+
+		for (int other : sectors[s])
+		{
+			if (other == viewer_id)
+			{
+				continue;
+			}
+
+			auto& peer = clients[other];
+
+			if (peer->_state == ST_INGAME && can_see(viewer_id, other))
+			{
+				vis.insert(other);
+			}
+		}
+	}
+
+	return vis;
+}
+
+
 void SESSION::send_move_packet(int c_id)
 {
 	SC_MOVE_OBJECT_PACKET p;
@@ -291,6 +351,7 @@ void wake_up_npc(int npc_id, int waker)
 	OVER_EXP* exp_over = new OVER_EXP;
 	exp_over->_comp_type = OP_AI_HELLO;
 	exp_over->_ai_target_obj = waker;
+
 	PostQueuedCompletionStatus(h_iocp, 1, npc_id, &exp_over->_over);
 
 	if (clients[npc_id]->_is_active)
@@ -417,71 +478,53 @@ void process_packet(int c_id, char* packet)
 
 		update_sector(c_id, old_x, old_y, x, y);
 
-		unordered_set<int> near_list;
+		unordered_set<int> near_list = gather_visible(c_id);
+
+		for (int oid : near_list)
+		{
+			if (is_npc(oid))
+			{
+				wake_up_npc(oid, c_id);
+			}
+		}
+
 		clients[c_id]->_vl.lock();
 		unordered_set<int> old_vlist = clients[c_id]->_view_list;
 		clients[c_id]->_vl.unlock();
 
-		for (auto& cl : clients)
-		{
-			if (cl.second->_state != ST_INGAME)
-			{
-				continue;
-			}
-
-			if (cl.second->_id == c_id)
-			{
-				continue;
-			}
-
-			if (can_see(c_id, cl.second->_id))
-			{
-				near_list.insert(cl.second->_id);
-			}
-		}
-
 		clients[c_id]->send_move_packet(c_id);
 
-		for (auto& pl : near_list)
-		{
-			auto& cpl = clients[pl];
+		for (int oid : near_list) {
+			auto& peer = clients[oid];
+			peer->_vl.lock();
+			bool already = peer->_view_list.count(c_id);
+			peer->_vl.unlock();
 
-			if (is_pc(pl))
+			if (already)
 			{
-				cpl->_vl.lock();
-				if (clients[pl]->_view_list.count(c_id))
-				{
-					cpl->_vl.unlock();
-					clients[pl]->send_move_packet(c_id);
-				}
-
-				else
-				{
-					cpl->_vl.unlock();
-					clients[pl]->send_add_player_packet(c_id);
-				}
+				peer->send_move_packet(c_id);
 			}
 
 			else
 			{
-				wake_up_npc(pl, c_id);
+				peer->send_add_player_packet(c_id);
 			}
 
-			if (old_vlist.count(pl) == 0)
+			if (!old_vlist.count(oid))
 			{
-				clients[c_id]->send_add_player_packet(pl);
+				clients[c_id]->send_add_player_packet(oid);
 			}
 		}
 
-		for (auto& pl : old_vlist)
+		for (int oid : old_vlist)
 		{
-			if (0 == near_list.count(pl))
+			if (!near_list.count(oid))
 			{
-				clients[c_id]->send_remove_player_packet(pl);
+				clients[c_id]->send_remove_player_packet(oid);
 
-				if (is_pc(pl))
+				if (is_pc(oid))
 				{
-					clients[pl]->send_remove_player_packet(c_id);
+					clients[oid]->send_remove_player_packet(c_id);
 				}
 			}
 		}
@@ -539,8 +582,10 @@ void do_npc_random_move(int npc_id)
 	int sy = (sec_idx / SECTOR_X) * SECTOR_SIZE;
 	int ex = min(sx + SECTOR_SIZE - 1, W_WIDTH - 1);
 	int ey = min(sy + SECTOR_SIZE - 1, W_HEIGHT - 1);
-	int old_x = npc.x, old_y = npc.y;
-	int x = old_x, y = old_y;
+	int old_x = npc.x;
+	int old_y = npc.y;
+	int x = old_x;
+	int y = old_y;
 
 	switch (rand() % 4) {
 	case 0:
@@ -590,96 +635,39 @@ void do_npc_random_move(int npc_id)
 	update_sector(npc_id, old_x, old_y, x, y);
 
 	unordered_set<int> old_vl;
-	unordered_set<int> new_vl;
-
-	for (auto& obj : clients) {
-		if (obj.second->_state != ST_INGAME)
-		{
-			continue;
-		}
-
-		if (is_npc(obj.second->_id))
-		{
-			continue;
-		}
-
-		if (can_see(npc._id, obj.second->_id))
-		{
-			old_vl.insert(obj.second->_id);
-		}
+	{
+		lock_guard<mutex> lk(npc._vl);
+		old_vl = npc._view_list;
 	}
 
-	int sx_i = sec_idx % SECTOR_X;
-	int sy_i = sec_idx / SECTOR_X;
 
-	for (int dy = -1; dy <= 1; ++dy)
+	auto new_vl = gather_visible(npc_id);
+
 	{
-		for (int dx = -1; dx <= 1; ++dx)
-		{
-			int nx = sx_i + dx, ny = sy_i + dy;
-
-			if (nx < 0 || nx >= SECTOR_X || ny < 0 || ny >= SECTOR_Y)
-			{
-				continue;
-			}
-
-			int neigh_idx = ny * SECTOR_X + nx;
-
-			lock_guard<mutex> lk(sector_mutexes[neigh_idx]);
-
-			for (int pid : sectors[neigh_idx])
-			{
-				if (pid == npc_id)
-				{
-					continue;
-				}
-
-				if (clients[pid]->_state != ST_INGAME || is_npc(pid))
-				{
-					continue;
-				}
-
-				if (can_see(npc_id, pid))
-				{
-					new_vl.insert(pid);
-				}
-			}
-		}
+		lock_guard<mutex> lk(npc._vl);
+		npc._view_list = new_vl;
 	}
 
-	for (int pl : new_vl)
+	for (int pid : new_vl)
 	{
-		if (!old_vl.count(pl))
+		if (!old_vl.count(pid))
 		{
-			clients[pl]->send_add_player_packet(npc_id);
+			clients[pid]->send_add_player_packet(npc_id);
 		}
 
 		else
 		{
-			clients[pl]->send_move_packet(npc_id);
+			clients[pid]->send_move_packet(npc_id);
 		}
 	}
 
-	for (int pl : old_vl)
+	for (int pid : old_vl)
 	{
-		if (!new_vl.count(pl))
+		if (!new_vl.count(pid))
 		{
-			clients[pl]->_vl.lock();
-
-			if (clients[pl]->_view_list.count(npc_id))
-			{
-				clients[pl]->_vl.unlock();
-				clients[pl]->send_remove_player_packet(npc_id);
-			}
-
-			else
-			{
-				clients[pl]->_vl.unlock();
-			}
+			clients[pid]->send_remove_player_packet(npc_id);
 		}
 	}
-
-	using namespace chrono;
 
 	long long current_time = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 
@@ -843,75 +831,33 @@ void worker_thread(HANDLE h_iocp)
 
 					event_type et{ npc_id, std::chrono::high_resolution_clock::now() + 1s, EV_RANDOM_MOVE, 0 };
 					timer_queue.push(et);
+
+					npc->_is_active = true;
 				}
 
 				delete ex_over;
 				break;
+			}
+
+			auto visible_players = gather_visible(npc_id);
+
+			if (!visible_players.empty())
+			{
+				do_npc_random_move(npc_id);
+
+				event_type et{ npc_id, std::chrono::high_resolution_clock::now() + 1s, EV_RANDOM_MOVE, 0 };
+				timer_queue.push(et);
+
+				npc->_is_active = true;
 			}
 
 			else
 			{
-				int sec_idx = get_sector_index(npc->x, npc->y);
-				int sx_i = sec_idx % SECTOR_X;
-				int sy_i = sec_idx / SECTOR_X;
-				bool keep_alive = false;
-
-				for (int dy = -1; dy <= 1 && !keep_alive; ++dy)
-				{
-					for (int dx = -1; dx <= 1; ++dx)
-					{
-						int nx = sx_i + dx;
-						int ny = sy_i + dy;
-
-						if (nx < 0 || nx >= SECTOR_X || ny < 0 || ny >= SECTOR_Y)
-						{
-							continue;
-						}
-
-						int neigh_idx = ny * SECTOR_X + nx;
-						lock_guard<mutex> lk(sector_mutexes[neigh_idx]);
-
-						for (int pid : sectors[neigh_idx])
-						{
-							if (is_npc(pid))
-							{
-								continue;
-							}
-
-							if (clients[pid]->_state != ST_INGAME)
-							{
-								continue;
-							}
-
-							if (can_see(npc_id, pid))
-							{
-								keep_alive = true;
-								break;
-							}
-						}
-
-						if (keep_alive)
-						{
-							break;
-						}
-					}
-				}
-
-				if (keep_alive)
-				{
-					do_npc_random_move(npc_id);
-					event_type et{ key, chrono::high_resolution_clock::now() + 1s, EV_RANDOM_MOVE, 0 };
-					timer_queue.push(et);
-				}
-
-				else
-				{
-					clients[key]->_is_active = false;
-				}
-
-				delete ex_over;
-				break;
+				npc->_is_active = false;
 			}
+
+			delete ex_over;
+			break;
 		}
 
 		case OP_AI_HELLO:
