@@ -559,12 +559,12 @@ void DB_Cleanup()
     }
 }
 
-bool DB_LoadPlayerPosition(int user_id, int& out_x, int& out_y) 
+bool DB_LoadPlayerPosition(const wchar_t* user_id, int& out_x, int& out_y) 
 {
     RETCODE retcode;
-    SQLHSTMT   hStmt = SQL_NULL_HSTMT;
+    SQLHSTMT hStmt = SQL_NULL_HSTMT;
     SQLINTEGER sql_user_x = 0, sql_user_y = 0;
-    SQLLEN     cb_user_x = 0, cb_user_y = 0, cb_dummy = 0;
+    SQLLEN cb_user_x = 0, cb_user_y = 0, cb_dummy = 0;
 
     setlocale(LC_ALL, "korean");
 
@@ -576,7 +576,7 @@ bool DB_LoadPlayerPosition(int user_id, int& out_x, int& out_y)
         return false;
     }
 
-    retcode = SQLBindParameter(hStmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &user_id, 0, NULL);
+    retcode = SQLBindParameter(hStmt, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WCHAR, 10, 0, (SQLPOINTER)user_id, 0, NULL);
 
     if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) 
     {
@@ -585,7 +585,11 @@ bool DB_LoadPlayerPosition(int user_id, int& out_x, int& out_y)
         return false;
     }
 
-    retcode = SQLExecDirectW(hStmt, (SQLWCHAR*)L"SELECT user_x, user_y FROM dbo.user_table WHERE user_id = ?", SQL_NTS);
+    retcode = SQLExecDirectW(
+        hStmt,
+        (SQLWCHAR*)L"SELECT user_x, user_y FROM dbo.user_table WHERE user_id = ?",
+        SQL_NTS
+    );
 
     if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) 
     {
@@ -634,11 +638,13 @@ bool DB_LoadPlayerPosition(int user_id, int& out_x, int& out_y)
     return true;
 }
 
-void DB_InsertPlayerPosition(int user_id, short x, short y) {
-    wprintf(L"[DEBUG] DB_InsertPlayerPosition 호출: user_id=%d, x=%d, y=%d\n", user_id, x, y);
+void DB_InsertPlayerPosition(const wchar_t* user_id, short x, short y) 
+{
+    wprintf(L"[DEBUG] DB_InsertPlayerPosition 호출: user_id=%ls, x=%d, y=%d\n", user_id, x, y);
 
     RETCODE retcode;
     SQLHSTMT hStmt = SQL_NULL_HSTMT;
+
     retcode = SQLAllocHandle(SQL_HANDLE_STMT, g_hDbc, &hStmt);
 
     if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) 
@@ -647,14 +653,15 @@ void DB_InsertPlayerPosition(int user_id, short x, short y) {
         return;
     }
 
-    SQLBindParameter(hStmt, 1, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &user_id, 0, NULL);
+    SQLBindParameter(hStmt, 1, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WCHAR, 10, 0, (SQLPOINTER)user_id, 0, NULL);
     SQLBindParameter(hStmt, 2, SQL_PARAM_INPUT, SQL_C_SHORT, SQL_SMALLINT, 0, 0, &x, 0, NULL);
     SQLBindParameter(hStmt, 3, SQL_PARAM_INPUT, SQL_C_SHORT, SQL_SMALLINT, 0, 0, &y, 0, NULL);
 
-    retcode = SQLExecDirectW(hStmt,
-        (SQLWCHAR*)L"INSERT INTO dbo.user_table(user_id, user_x, user_y) "
-        L"     VALUES (?, ?, ?)",
-        SQL_NTS);
+    retcode = SQLExecDirectW(
+        hStmt,
+        (SQLWCHAR*)L"INSERT INTO dbo.user_table(user_id, user_x, user_y) VALUES (?, ?, ?)",
+        SQL_NTS
+    );
 
     wprintf(L"[DEBUG] SQLExecDirect (INSERT) -> retcode=%d\n", retcode);
 
@@ -667,8 +674,9 @@ void DB_InsertPlayerPosition(int user_id, short x, short y) {
     SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
 }
 
-void DB_SavePlayerPosition(int user_id, int x, int y) {
-    wprintf(L"[DEBUG] DB_SaveOrInsertPlayerPosition 호출: user_id=%d, x=%d, y=%d\n", user_id, x, y);
+void DB_SavePlayerPosition(const wchar_t* user_id, int x, int y) 
+{
+    wprintf(L"[DEBUG] DB_SaveOrInsertPlayerPosition 호출: user_id=%ls, x=%d, y=%d\n", user_id, x, y);
 
     RETCODE retcode;
     SQLHSTMT hStmt = SQL_NULL_HSTMT;
@@ -682,13 +690,15 @@ void DB_SavePlayerPosition(int user_id, int x, int y) {
 
     SQLBindParameter(hStmt, 1, SQL_PARAM_INPUT, SQL_C_SHORT, SQL_SMALLINT, 0, 0, &x, 0, NULL);
     SQLBindParameter(hStmt, 2, SQL_PARAM_INPUT, SQL_C_SHORT, SQL_SMALLINT, 0, 0, &y, 0, NULL);
-    SQLBindParameter(hStmt, 3, SQL_PARAM_INPUT, SQL_C_LONG, SQL_INTEGER, 0, 0, &user_id, 0, NULL);
+    SQLBindParameter(hStmt, 3, SQL_PARAM_INPUT, SQL_C_WCHAR, SQL_WCHAR, 10, 0, (SQLPOINTER)user_id, 0, NULL);
 
-    retcode = SQLExecDirectW(hStmt,
+    retcode = SQLExecDirectW(
+        hStmt,
         (SQLWCHAR*)L"UPDATE dbo.user_table "
         L"   SET user_x = ?, user_y = ? "
         L" WHERE user_id = ?",
-        SQL_NTS);    
+        SQL_NTS
+    );
     
     wprintf(L"[DEBUG] SQLExecDirect (UPDATE) -> retcode=%d\n", retcode);
 
@@ -747,11 +757,31 @@ void process_packet(int c_id, char* packet)
     case CS_LOGIN:
     {
         CS_LOGIN_PACKET *p = reinterpret_cast<CS_LOGIN_PACKET*>(packet);
-        int user_id = atoi(p->name);
-        int saved_x = 0, saved_y = 0;
-        bool exist = DB_LoadPlayerPosition(user_id, saved_x, saved_y);
 
-        if (!exist) {
+        wchar_t wUserId[11] = { 0 };
+        int convLen = MultiByteToWideChar(CP_UTF8, 0, p->name, -1, wUserId, 10);
+
+        if (convLen == 0)
+        {
+            SC_LOGIN_FAIL_PACKET fail_pkt;
+            fail_pkt.size = sizeof(fail_pkt);
+            fail_pkt.type = SC_LOGIN_FAIL;
+            clients[c_id]->do_send(&fail_pkt);
+
+            closesocket(clients[c_id]->_socket);
+
+            lock_guard<mutex> ll{ clients[c_id]->_s_lock };
+            clients[c_id]->_state.store(ST_FREE);
+
+            break;
+        }
+
+        int saved_x = 0;
+        int saved_y = 0;
+        bool exist = DB_LoadPlayerPosition(wUserId, saved_x, saved_y);
+
+        if (!exist) 
+        {
             SC_LOGIN_FAIL_PACKET fail_pkt;
             fail_pkt.size = sizeof(fail_pkt);
             fail_pkt.type = SC_LOGIN_FAIL;
@@ -936,8 +966,13 @@ void process_packet(int c_id, char* packet)
             }
         }
 
-        int user_id = atoi(clients[c_id]->_name);
-        DB_SavePlayerPosition(user_id, x, y);
+        wchar_t wUserId[11] = { 0 };
+        int convLen = MultiByteToWideChar(CP_UTF8, 0, clients[c_id]->_name, -1, wUserId, 10);
+
+        if (convLen != 0)
+        {
+            DB_SavePlayerPosition(wUserId, x, y);
+        }
 
         break;
     }
@@ -949,10 +984,14 @@ void process_packet(int c_id, char* packet)
 
 void disconnect(int c_id)
 {
-    int user_id = atoi(clients[c_id]->_name);
+    wchar_t wUserId[11] = { 0 };
+
+    int convLen = MultiByteToWideChar(CP_UTF8, 0, clients[c_id]->_name, -1, wUserId, 10);
+
     short last_x = clients[c_id]->x;
     short last_y = clients[c_id]->y;
-    DB_SavePlayerPosition(user_id, last_x, last_y);
+
+    DB_SavePlayerPosition(wUserId, last_x, last_y);
 
     clients[c_id]->_vl.lock();
     unordered_set<int> vl = clients[c_id]->_view_list;

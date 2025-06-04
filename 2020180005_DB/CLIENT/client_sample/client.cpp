@@ -361,7 +361,7 @@ int main()
     // 2) ID 입력 (숫자 전용, 숫자가 아닌 문자가 있으면 재입력 요청)
     std::string user_id_str;
     while (true) {
-        cout << "Enter your ID (숫자로만 구성): ";
+        cout << "Enter your ID (최대 10자): ";
         std::getline(cin, user_id_str);
 
         if (user_id_str.empty()) {
@@ -369,19 +369,12 @@ int main()
             continue;
         }
 
-        bool all_digits = true;
-        for (char c : user_id_str) {
-            if (!isdigit((unsigned char)c)) {
-                all_digits = false;
-                break;
-            }
-        }
-
-        if (!all_digits) {
-            cout << "잘못된 형식입니다. 숫자만 입력하세요.\n";
+        if (user_id_str.size() > 10) {
+            cout << "ID는 최대 10자까지 가능합니다. 다시 입력하세요.\n";
             continue;
         }
-        break;  // 숫자로만 이루어진 ID가 들어왔으면 루프 탈출
+
+        break;
     }
 
     // 3) 서버 연결
