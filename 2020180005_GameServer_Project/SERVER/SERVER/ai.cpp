@@ -259,6 +259,11 @@ void do_npc_random_move(int npc_id)
     {
         auto& player = clients[pid];
 
+        if (player->is_dummy)
+        {
+            continue;
+        }
+
         int dx = abs(player->x - mx);
         int dy = abs(player->y - my);
 
@@ -352,6 +357,11 @@ void do_npc_seek_move(int npc_id)
     for (int pid : gather_visible_players(npc_id))
     {
         auto& player = clients[pid];
+
+        if (player->is_dummy)
+        {
+            continue;
+        }
 
         int dx = abs(player->x - mx);
         int dy = abs(player->y - my);

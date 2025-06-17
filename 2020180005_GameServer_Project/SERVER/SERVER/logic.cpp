@@ -313,6 +313,11 @@ void handle_heal(shared_ptr<SESSION> s)
 
 void handle_monster_attack(shared_ptr<SESSION> monster, shared_ptr <SESSION> player)
 {
+    if (player->is_dummy)
+    {
+        return;
+    }
+
     auto now = chrono::high_resolution_clock::now();
 
     if (!monster->is_active.load() || player->is_invincible && now < player->invincible_end_time || player->hp <= 0)
