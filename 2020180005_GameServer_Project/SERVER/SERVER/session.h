@@ -19,6 +19,7 @@ public:
 
     atomic<S_STATE> state;
     atomic<bool> greet_mode{ false };
+    atomic<bool> heal;
     atomic<int> greet_moves_left{ 0 };
     atomic_bool is_active;
 

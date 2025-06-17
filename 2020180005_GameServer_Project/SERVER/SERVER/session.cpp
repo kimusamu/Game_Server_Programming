@@ -23,6 +23,7 @@ SESSION::SESSION()
     path.reserve(W_WIDTH + W_HEIGHT);
     behavior = MoveBehavior::RANDOM;
 
+    heal = false;
     potion = 0;
     exp_potion = 0;
     gold = 0;

@@ -151,3 +151,35 @@ bool positions_equal(const SESSION* a, const SESSION* b)
 {
     return (a->x == b->x && a->y == b->y);
 }
+
+void send_obstacles_to_client(int c_id)
+{
+    auto& sess = clients[c_id];
+    int sec = get_sector_index(sess->x, sess->y);
+    auto neigh_secs = get_neighbor_sectors(sec);
+
+    for (int s : neigh_secs)
+    {
+        int sx = (s % SECTOR_X) * SECTOR_SIZE;
+        int sy = (s / SECTOR_X) * SECTOR_SIZE;
+        int ex = min(sx + SECTOR_SIZE, W_WIDTH);
+        int ey = min(sy + SECTOR_SIZE, W_HEIGHT);
+
+        for (int y = sy; y < ey; ++y)
+        {
+            for (int x = sx; x < ex; ++x)
+            {
+                if (obstacle_map[y * W_WIDTH + x]) 
+                {
+                    SC_OBSTACLE_PACKET pkt;
+                    pkt.size = sizeof(pkt);
+                    pkt.type = SC_OBSTACLE;
+                    pkt.x = static_cast<short>(x);
+                    pkt.y = static_cast<short>(y);
+
+                    sess->do_send(&pkt);
+                }
+            }
+        }
+    }
+}

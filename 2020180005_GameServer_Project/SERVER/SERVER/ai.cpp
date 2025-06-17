@@ -252,6 +252,22 @@ void do_npc_random_move(int npc_id)
         }
     }
 
+    short mx = npc->x;
+    short my = npc->y;
+
+    for (int pid : gather_visible_players(npc_id))
+    {
+        auto& player = clients[pid];
+
+        int dx = abs(player->x - mx);
+        int dy = abs(player->y - my);
+
+        if ((dx <= 1 && dy <= 1) && !(dx == 0 && dy == 0))
+        {
+            handle_monster_attack(clients[npc_id], player);
+        }
+    }
+
     long long current_time = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
     clients[npc_id]->last_move_time = current_time;
 }
@@ -327,6 +343,22 @@ void do_npc_seek_move(int npc_id)
         if (!new_vl.count(pid))
         {
             clients[pid]->send_remove_player_packet(npc_id);
+        }
+    }
+
+    short mx = monster->x;
+    short my = monster->y;
+
+    for (int pid : gather_visible_players(npc_id))
+    {
+        auto& player = clients[pid];
+
+        int dx = abs(player->x - mx);
+        int dy = abs(player->y - my);
+
+        if ((dx <= 1 && dy <= 1) && !(dx == 0 && dy == 0))
+        {
+            handle_monster_attack(clients[npc_id], player);
         }
     }
 

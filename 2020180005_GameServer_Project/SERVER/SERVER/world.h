@@ -36,3 +36,5 @@ unordered_set<int> gather_visible(int viewer_id);
 vector<int> gather_visible_players(int npc_id);
 
 bool positions_equal(const SESSION* a, const SESSION* b);
+
+void send_obstacles_to_client(int c_id);

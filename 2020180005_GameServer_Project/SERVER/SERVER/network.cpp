@@ -181,6 +181,8 @@ void process_packet(int c_id, char* packet)
         update_sector(c_id, 0, 0, clients[c_id]->x, clients[c_id]->y);
         clients[c_id]->send_login_info_packet();
 
+        schedule_heal_event(c_id);
+
         for (auto& pl_pair : clients)
         {
             int other_id = pl_pair.first;

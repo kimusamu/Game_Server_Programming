@@ -27,6 +27,7 @@ void handle_respawn(shared_ptr<SESSION> s)
     s->invincible_end_time = high_resolution_clock::now() + INVINCIBLE_ON_RESPAWN;
 
     s->send_stat_change_packet();
+    send_obstacles_to_client(id);
 
     auto vis = gather_visible(id);
 
@@ -85,19 +86,8 @@ void handle_damage(shared_ptr<SESSION> a, shared_ptr<SESSION> b)
     a->send_stat_change_packet();
     b->send_stat_change_packet();
 
-    auto schedule_heal = [&](shared_ptr<SESSION> p)
-    {
-        int max_hp = 3 * p->level;
-
-        if (p->hp > 0 && p->hp < max_hp)
-        {
-            event_type et{ p->id, chrono::high_resolution_clock::now() + 10s, EV_HEAL, 0 };
-            timer_queue.push(et);
-        }
-    };
-
-    schedule_heal(a);
-    schedule_heal(b);
+    schedule_heal_event(a->id);
+    schedule_heal_event(b->id);
 
     const char* type_a = is_pc(a->id) ? "Player" : "NPC";
     const char* type_b = is_pc(b->id) ? "Player" : "NPC";
@@ -291,6 +281,13 @@ void handle_player_attack(int c_id)
 
 void handle_heal(shared_ptr<SESSION> s)
 {
+    s->heal = false;
+
+    if (s->hp <= 0)
+    {
+        return;
+    }
+
     int id = s->id;
     int max_hp = 3 * s->level;
 
@@ -310,9 +307,74 @@ void handle_heal(shared_ptr<SESSION> s)
 
     if (s->hp < max_hp)
     {
-        cout << s->name << " HEAL UP \n";
+        schedule_heal_event(s->id);
+    }
+}
 
-        event_type et{ id, high_resolution_clock::now() + 10s, EV_HEAL, 0 };
+void handle_monster_attack(shared_ptr<SESSION> monster, shared_ptr <SESSION> player)
+{
+    auto now = chrono::high_resolution_clock::now();
+
+    if (!monster->is_active.load() || player->is_invincible && now < player->invincible_end_time || player->hp <= 0)
+    {
+        return;
+    }
+
+    player->hp -= 1;
+    player->is_invincible = true;
+    player->invincible_end_time = now + INVINCIBLE_ON_HIT;
+    player->send_stat_change_packet();
+
+    cout << " MONSTER " << monster->id << " ATTACKED PLAYER " << player->id << ", HP = " << player->hp << "\n";
+
+    schedule_heal_event(player->id);
+
+    if (player->hp <= 0)
+    {
+        cout << " PLAYER " << player->id << " WAS KILLED BY MOSTNER. RESPAWN IN 10S. \n";
+
+        int old_idx = get_sector_index(player->x, player->y);
+
+        {
+            std::lock_guard<std::mutex> lk(sector_mutexes[old_idx]);
+            sectors[old_idx].erase(session_ptrs[player->id]);
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(player->vl);
+            player->view_list.clear();
+        }
+
+        SC_REMOVE_OBJECT_PACKET rem{ sizeof(rem), SC_REMOVE_OBJECT, player->id };
+
+        for (auto& [pid, peer] : clients)
+        {
+            if (peer->state.load() == ST_INGAME)
+            {
+                peer->do_send(&rem);
+            }
+        }
+
+        event_type et{ player->id, chrono::high_resolution_clock::now() + 10s, EV_RESPAWN, 0 };
         timer_queue.push(et);
+    }
+}
+
+void schedule_heal_event(int session_id)
+{
+    auto& sess = clients[session_id];
+    int max_hp = 3 * sess->level;
+
+    if (sess->hp > 0 && sess->hp < max_hp)
+    {
+        bool expected = false;
+
+        if (sess->heal.compare_exchange_strong(expected, true))
+        {
+            cout << sess->name << " HEAL UP \n";
+
+            event_type et{ session_id, chrono::high_resolution_clock::now() + 5s, EV_HEAL, 0 };
+            timer_queue.push(et);
+        }
     }
 }
